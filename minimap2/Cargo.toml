@@ -1,0 +1,11 @@
+[package]
+name = "minimap2"
+version = "0.1.0"
+edition = "2021"
+authors = ["Rui Xu <xurui1412@gmail.com>"]
+description = "High-level Rust wrapper for minimap2."
+license = "MIT"
+
+[dependencies]
+minimap2-sys = { path = "../minimap2-sys", version = "0.1.0" }
+libc = "0.2"

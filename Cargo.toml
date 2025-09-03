@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "minimap2-sys",
+    "minimap2"
+]
+
+[profile.release]
+lto = true
+codegen-units = 1

@@ -2,7 +2,7 @@
 name = "minimap2-sys"
 version = "0.1.0"
 edition = "2021"
-authors = ["Heng Li <hli@ds.dfci.harvard.edu">]
+authors = ["Heng Li <hli@ds.dfci.harvard.edu>"]
 description = "Raw FFI bindings to minimap2."
 license = "MIT"
 

@@ -1,9 +1,10 @@
 [workspace]
 resolver = "2"
-members = [
-    "minimap2-sys",
-    "minimap2"
-]
+members = ["minimap2-sys", "minimap2"]
+default-members = ["minimap2-sys", "minimap2"]
+
+[workspace.dependencies]
+minimap2-sys = {path = "minimap2-sys"}
 
 [profile.release]
 lto = true

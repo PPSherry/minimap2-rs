@@ -151,11 +151,13 @@ fn main() {
                 .define("KSW_SSE2_ONLY", None)
                 .flag_if_supported("-msse2")
                 .flag_if_supported("-mno-sse4.1")
-                .warnings(false);
-                
-            // We need to compile these with different object names to avoid conflicts
-            // This is a simplified approach - in a real implementation, we might need
-            // to use different compilation strategies
+                .warnings(false)
+                .files(vec![
+                    minimap2_src_dir.join("ksw2_extz2_sse.c"),
+                    minimap2_src_dir.join("ksw2_extd2_sse.c"),
+                    minimap2_src_dir.join("ksw2_exts2_sse.c"),
+                ])
+                .compile("minimap2_sse2_fallback");
             
             // Dispatch mechanism
             let mut dispatch_builder = cc::Build::new();
@@ -191,10 +193,7 @@ fn main() {
         .allowlist_function("mm_.*")
         .allowlist_type("mm_.*")
         .allowlist_var("MM_.*")
-        // Also include some ksw2 functions that might be needed
-        .allowlist_function("ksw_.*")
-        .allowlist_type("ksw_.*")
-        // Tell clang where to find header files
+        // include header directory & define HAVE_KALLOC
         .clang_arg("-Iminimap2")
         .clang_arg("-DHAVE_KALLOC")
         // Preserve documentation comments from C code

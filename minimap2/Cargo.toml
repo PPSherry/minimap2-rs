@@ -7,5 +7,8 @@ description = "High-level Rust wrapper for minimap2."
 license = "MIT"
 
 [dependencies]
-minimap2-sys = { path = "../minimap2-sys", version = "0.1.0" }
+minimap2-sys = { workspace = true }
 libc = "0.2"
+noodles-fastq = "0.21"
+noodles-sam = "0.62"
+anyhow = "1.0"

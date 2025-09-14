@@ -377,6 +377,7 @@ dependencies = [
  "anyhow",
  "libc",
  "minimap2-sys",
+ "noodles-core",
  "noodles-fastq",
  "noodles-sam",
 ]

@@ -11,4 +11,5 @@ minimap2-sys = { workspace = true }
 libc = "0.2"
 noodles-fastq = "0.21"
 noodles-sam = "0.62"
+noodles-core = "0.15"
 anyhow = "1.0"

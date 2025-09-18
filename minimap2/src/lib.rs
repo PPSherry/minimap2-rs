@@ -884,7 +884,7 @@ mod tests {
 
     use noodles_sam::io::Writer as SamWriter;
     use noodles_sam::alignment::io::Write;
-    use noodles_sam::alignment::record::Cigar;
+    //use noodles_sam::alignment::record::Cigar;
     use std::fs::File;
     use std::path::Path;
     use std::io::BufReader;
@@ -964,60 +964,16 @@ mod tests {
         println!("Validation completed");
 
         // write SAM file
-        // let mut sam_writer = SamWriter::new(File::create(&output_sam_path)?);
-        // sam_writer.write_header(&header)?;
-        // for record in &all_alignments {
-        //     sam_writer.write_alignment_record(&header, record)?;
-        // }
-        // // ensure the content in writer buffer is written to file
-        // drop(sam_writer); 
-
-        // assert!(Path::new(output_sam_path).exists(), "SAM file not created successfully");
-        // println!("Test successful, SAM file generated at: {}", output_sam_path);
-        
-
-        // ======================= DEBUGGING BLOCK START =======================
-
-        println!("\n--- Debugging Alignment Records ---");
-
-        for (i, record_buf) in all_alignments.iter().enumerate() {
-            let read_name = record_buf.name().map_or("No Name", |n| std::str::from_utf8(n.as_ref()).unwrap_or("Invalid UTF-8"));
-            let sequence_len = record_buf.sequence().len();
-            let cigar = record_buf.cigar();
-            
-            // Calculate the length of the query sequence consumed by the CIGAR string
-            let cigar_query_len: usize = cigar.as_ref().iter().map(|op| {
-                match op.kind() {
-                    // These CIGAR operations consume the query sequence
-                    noodles_sam::alignment::record::cigar::op::Kind::Match |      // M
-                    noodles_sam::alignment::record::cigar::op::Kind::Insertion |  // I
-                    noodles_sam::alignment::record::cigar::op::Kind::SoftClip |   // S
-                    noodles_sam::alignment::record::cigar::op::Kind::SequenceMatch | // =
-                    noodles_sam::alignment::record::cigar::op::Kind::SequenceMismatch => op.len(), // X
-                    
-                    // These do not
-                    _ => 0,
-                }
-            }).sum();
-
-            println!("-------------------------------------");
-            println!("Record #{}: {}", i + 1, read_name);
-            println!("  - Sequence Length : {}", sequence_len);
-            println!("  - CIGAR             : {:?}", cigar);
-            println!("  - CIGAR Query Length: {}", cigar_query_len);
-
-            // Add a check to highlight the problematic record
-            if sequence_len != cigar_query_len && !cigar.is_empty() {
-                println!("  - MISMATCH DETECTED!");
-            }
+        let mut sam_writer = SamWriter::new(File::create(&output_sam_path)?);
+        sam_writer.write_header(&header)?;
+        for record in &all_alignments {
+            sam_writer.write_alignment_record(&header, record)?;
         }
-        println!("--- End of Debugging ---");
+        // ensure the content in writer buffer is written to file
+        drop(sam_writer); 
 
-        // We can temporarily bypass the rest of the test to focus on the output
-        // assert!(Path::new(output_sam_path).exists(), "SAM file not created successfully");
-        // println!("Test successful, SAM file generated at: {}", output_sam_path);
-        
-        // ======================= DEBUGGING BLOCK END =======================
+        assert!(Path::new(output_sam_path).exists(), "SAM file not created successfully");
+        println!("Test successful, SAM file generated at: {}", output_sam_path);
 
         Ok(())
     }

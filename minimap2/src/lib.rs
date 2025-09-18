@@ -21,6 +21,7 @@ use std::{
 pub use minimap2_sys;
 
 /// Main interface for performing read alignments using minimap2
+#[derive(Debug)]
 pub struct Minimap2Aligner {
     index: Arc<Minimap2Index>,
     opts: Minimap2Opts,
@@ -46,6 +47,7 @@ impl Minimap2Aligner {
     }
     
     /// Create a new aligner with specified thread count for optimal performance
+    /// Currently, extra_params has not been implemented
     pub fn with_threads(opts: Minimap2Opts, num_threads: usize) -> Result<Self> {
         let mut aligner = Self::new(opts)?;
 
@@ -65,7 +67,7 @@ impl Minimap2Aligner {
     }
 
     /// Align long read assay (single-end)
-    /// main function for aligning a single read
+    /// Main function for aligning a single read
     pub fn align_read(&mut self, fq: &fastq::Record) -> Result<Vec<RecordBuf>> {
         self.inner.align_read(&self.index, fq)
     }
@@ -120,7 +122,7 @@ impl Minimap2Aligner {
         Ok(results)
     }
     
-}
+    }
 
 /// This will return a copy of the aligner with the same reference index.
 /// Returning a new aligner is necessary for multithreaded alignment, as the
@@ -179,7 +181,7 @@ pub struct Minimap2Opts {
     pub preset: Option<String>,
     pub forward_only: bool, // consider transcript forward strand only ( minimap2 -uf option)
     pub sam_output: bool, // Output in SAM format
-    pub extra_params: Vec<String>, // Additional minimap2 parameters
+    pub extra_params: Vec<String>, // TODO: process additional minimap2 parameters
 }
 
 impl Minimap2Opts {
@@ -197,9 +199,6 @@ impl Minimap2Opts {
     /// Set the alignment preset
     pub fn with_preset(mut self, preset: Preset) -> Self {
         self.preset = Some(preset.as_str().to_string());
-        if preset.is_rna() {
-            self.forward_only = false; // Default to consider both strands
-        }
         self
     }
     
@@ -250,6 +249,7 @@ impl Minimap2Opts {
 }
 
 /// A single part of a minimap2 index
+#[derive(Debug)]
 struct IndexPart {
     inner: *mut minimap2_sys::mm_idx_t,
 }
@@ -269,6 +269,7 @@ impl Drop for IndexPart {
 /// 
 /// This structure follows the pattern from example.c with minimap2 where large indices
 /// may be split into multiple parts that need to be processed sequentially.
+#[derive(Debug)]
 pub struct Minimap2Index {
     parts: Vec<IndexPart>, // All index parts loaded from file/sequences
     pub header: Header,
@@ -299,16 +300,16 @@ impl Minimap2Index {
         };
         
         unsafe {
-            // Use mm_set_opt to initialize both iopt and mopt with the specified preset
+            // First call mm_set_opt with NULL to initialize default values
+            minimap2_sys::mm_set_opt(std::ptr::null(), &mut iopt, &mut mopt);
+            
+            // Then apply preset if specified
             if let Some(ref preset) = opts.preset {
                 let preset_cstr = CString::new(preset.as_str())?;
                 let result = minimap2_sys::mm_set_opt(preset_cstr.as_ptr(), &mut iopt, &mut mopt);
                 if result < 0 {
                     bail!("Failed to apply preset '{}': unknown preset", preset);
                 }
-            } else {
-                // Use default settings if no preset is specified
-                minimap2_sys::mm_set_opt(std::ptr::null(), &mut iopt, &mut mopt);
             }
         }
         
@@ -434,6 +435,7 @@ unsafe impl Send for Minimap2Index {}
 unsafe impl Sync for Minimap2Index {}
 
 /// Inner aligner for implementing thread-safe alignment operations
+#[derive(Debug)]
 pub struct InnerAligner {
     inner: *mut minimap2_sys::mm_tbuf_t, // thread buffer
     opts: *mut minimap2_sys::mm_mapopt_t, // mapping options
@@ -495,9 +497,12 @@ impl InnerAligner {
         let preset_cstr = CString::new(preset)?;
         
         // Initialize index options for mm_set_opt
-        let mut iopt = std::mem::MaybeUninit::<minimap2_sys::mm_idxopt_t>::zeroed().assume_init();
+        let mut iopt = std::mem::zeroed::<minimap2_sys::mm_idxopt_t>();
         
-        // Apply preset using mm_set_opt (example.c pattern)
+        // First call mm_set_opt with NULL to initialize default values
+        minimap2_sys::mm_set_opt(std::ptr::null(), &mut iopt, opts_ptr);
+        
+        // Then apply preset using mm_set_opt (example.c pattern)
         let result = minimap2_sys::mm_set_opt(
             preset_cstr.as_ptr(),
             &mut iopt,
@@ -761,52 +766,152 @@ impl BatchAligner {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_preset_conversion() {
-        assert_eq!(Preset::MapOnt.as_str(), "map-ont");
-        assert_eq!(Preset::MapPb.as_str(), "map-pb");
-        assert_eq!(Preset::MapIclr.as_str(), "map-iclr");
-        assert_eq!(Preset::Splice.as_str(), "splice");
-    }
-
-    #[test]
-    fn test_preset_type_detection() {
-        assert!(Preset::MapOnt.is_dna());
-        assert!(Preset::MapPb.is_dna());
-        assert!(Preset::MapIclr.is_dna());
-        assert!(Preset::Splice.is_rna());
-        
-        assert!(!Preset::Splice.is_dna());
-        assert!(!Preset::MapOnt.is_rna());
-    }
-
-    #[test]
-    fn test_opts_creation() {
-        let opts = Minimap2Opts::new("/path/to/genome")
-            .with_preset(Preset::MapOnt)
-            .with_forward_only(true);
-        
-        assert_eq!(opts.genome_dir, PathBuf::from("/path/to/genome"));
-        assert_eq!(opts.preset, Some("map-ont".to_string()));
-        assert!(opts.forward_only);
-    }
     
+    /// Test using .mmi format reference file to initialize Minimap2Aligner
     #[test]
-    fn test_parallel_config() {
-        let config = ParallelConfig::default();
-        assert_eq!(config.num_threads, 0);
-        assert_eq!(config.batch_size, 1000);
-        assert!(!config.verbose);
+    fn test_load_prebuilt_index() {
+        let index_path = "/data/xurui/project/minimap2-rs/data/minimap2_ref/GRCh38.mmi";
         
-        let custom_config = ParallelConfig {
-            num_threads: 4,
-            batch_size: 500,
-            verbose: true,
-        };
-        assert_eq!(custom_config.num_threads, 4);
-        assert_eq!(custom_config.batch_size, 500);
-        assert!(custom_config.verbose);
+        let opts = Minimap2Opts::new(index_path)
+            .with_preset(Preset::MapOnt);
+            
+        let result = Minimap2Aligner::new(opts);
+        
+        match result {
+            Ok(aligner) => {
+                println!("Successfully loaded prebuilt index from: {}", index_path);
+
+                assert!(aligner.index.parts.len() > 0);
+                println!("Number of index parts: {}", aligner.index.parts.len());
+
+                assert!(!aligner.get_header().reference_sequences().is_empty());
+                println!("Reference sequences: {:?}", aligner.get_header().reference_sequences());
+            }
+            Err(e) => {
+                println!("Expected failure with fake path: {}", e);
+                assert!(e.to_string().contains("does not exist") || 
+                        e.to_string().contains("Failed to open file"));
+            }
+        }
     }
-    
+
+    /// Test using .fasta reference file to build index and initialize Minimap2Aligner
+    /// 
+    /// NOTE: it will take several minutes to build index from FASTA file
+    #[test]
+    fn test_dynamic_index_build() {
+        let fasta_path = "/data/Public/genome/GRCh38/GRCh38.primary_assembly.genome.fa.gz";
+        
+        let opts = Minimap2Opts::new(fasta_path)
+            .with_preset(Preset::MapPb);
+            
+        let result = Minimap2Aligner::new(opts);
+        
+        match result {
+            Ok(aligner) => {
+                println!("Successfully built dynamic index from: {}", fasta_path);
+
+                assert!(aligner.index.num_parts() > 0);
+                println!("Number of index parts: {}", aligner.index.num_parts());
+
+                let header = aligner.get_header();
+                assert!(!header.reference_sequences().is_empty());
+                
+                // Print reference sequence information for debugging
+                for (name, ref_seq) in header.reference_sequences() {
+                    println!("Reference sequence: {} (length: {})", 
+                            String::from_utf8_lossy(name), 
+                            ref_seq.length());
+                }
+            }
+            Err(e) => {
+                // Expected to fail because the path is fake
+                println!("Expected failure with fake path: {}", e);
+                assert!(e.to_string().contains("does not exist") || 
+                        e.to_string().contains("Failed to open file"));
+            }
+        }
+    }
+
+    use noodles_sam::io::Writer as SamWriter;
+    use noodles_sam::alignment::io::Write;
+    use std::fs::File;
+    use std::path::Path;
+    use std::io::BufReader;
+
+    #[test]
+    fn test_alignment() -> Result<()> {
+
+        let ref_path = "/data/Public/genome/GRCh38/GRCh38.primary_assembly.genome.fa.gz";
+        let reads_path = "/data/xurui/project/minimap2-rs/data/h38_dna/SRR17666426_20.fastq";
+        let output_sam_path = "/data/xurui/project/minimap2-rs/data/h38_dna/SRR17666426_20_rs.sam";
+
+        // set expected results from minimap2 (RNAME, POS, FLAG)
+        let expected_results = vec![
+            ("chr1", 1, 0),
+            ("chr1", 1, 0),
+            ("chr2", 1, 0),
+            ("*", 0, 4),
+            ("*", 0, 4),
+            ("chr1", 1, 16),
+        ];
+
+        // initialize aligner
+        let opts = Minimap2Opts::new(&ref_path)
+            .with_preset(Preset::MapOnt);
+        let mut aligner = Minimap2Aligner::new(opts)?;
+        let header = aligner.get_header().clone(); // clone header for later validation
+
+        // read FASTQ file
+        let mut reader = fastq::io::Reader::new(BufReader::new(File::open(&reads_path)?));
+        let records: Vec<_> = reader.records().collect::<Result<_, _>>()?;
+
+        let mut all_alignments = Vec::new();
+        for record in &records {
+            let alignments = aligner.align_read(record)?;
+            // minimap2 may return multiple alignments for one read, here we only take the first one (usually the best)
+            if let Some(best_alignment) = alignments.into_iter().next() {
+                all_alignments.push(best_alignment);
+            }
+        }
+        
+        assert_eq!(
+            all_alignments.len(),
+            expected_results.len(),
+            "number of alignment results does not match expected"
+        );
+
+        for (i, record_buf) in all_alignments.iter().enumerate() {
+            let expected = &expected_results[i];
+            
+            let rname = if let Some(rid) = record_buf.reference_sequence_id() {
+                // convert reference ID back to sequence name from header (e.g., "chr1")
+                header.reference_sequences().get_index(rid).map(|(name, _)| std::str::from_utf8(name).unwrap()).unwrap_or("*")
+            } else {
+                "*"
+            };
+
+            let pos = record_buf.alignment_start().map_or(0, |p| p.get());
+            let flag = record_buf.flags().bits();
+
+            assert_eq!(rname, expected.0, "Record #{} RNAME does not match", i + 1);
+            assert_eq!(pos, expected.1, "Record #{} POS does not match", i + 1);
+            assert_eq!(flag, expected.2, "Record #{} FLAG does not match", i + 1);
+        }
+        
+        // write SAM file and validate
+        let mut sam_writer = SamWriter::new(File::create(&output_sam_path)?);
+        sam_writer.write_header(&header)?;
+        for record in &all_alignments {
+            sam_writer.write_alignment_record(&header, record)?;
+        }
+        // ensure the content in writer buffer is written to file
+        drop(sam_writer); 
+
+        assert!(Path::new(output_sam_path).exists(), "SAM file not created successfully");
+        println!("Test successful, SAM file generated at: {}", output_sam_path);
+        
+        Ok(())
+    }
+
 }

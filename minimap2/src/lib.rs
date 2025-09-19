@@ -584,10 +584,16 @@ impl InnerAligner {
             Vec::new()
         };
         
-        // Calculate hard clipping positions
-        let (left_hard_clip, right_hard_clip) = self.calculate_hard_clips(&cigar_ops);
-        
-        // Set sequence after removing hard-clipped portions
+        // Calculate hard clipping positions from CIGAR (in CIGAR orientation, positive strand)
+        let (mut left_hard_clip, mut right_hard_clip) = self.calculate_hard_clips(&cigar_ops);
+
+        // If query is mapped to reverse strand, CIGAR ends correspond to reversed read orientation
+        // The FASTQ sequence here is in original orientation, so swap ends to apply clips correctly
+        if reg.rev() != 0 {
+            std::mem::swap(&mut left_hard_clip, &mut right_hard_clip);
+        }
+
+        // Set sequence after removing hard-clipped portions (in the original read orientation)
         let clipped_sequence = self.apply_hard_clipping(sequence, left_hard_clip, right_hard_clip);
         *record.sequence_mut() = clipped_sequence.into();
         
@@ -662,7 +668,6 @@ impl InnerAligner {
         if start >= end || start >= seq_len {
             return Vec::new(); // Return empty sequence if clipping removes everything
         }
-        
         sequence[start..end].to_vec()
     }
     
@@ -672,22 +677,23 @@ impl InnerAligner {
             return Ok(Vec::new());
         }
         
-        let mut ops = Vec::new();
-        // Add leading soft clip if query doesn't start at position 0
-        if reg.qs > 0 {
-            ops.push(Op::new(Kind::SoftClip, reg.qs as usize));
-        }
-        
+        // Compute soft clip lengths relative to the original query orientation
+        let leading_soft_clip_len: usize = if reg.qs > 0 { reg.qs as usize } else { 0 };
+        let trailing_soft_clip_len: usize = {
+            let qe = reg.qe as usize;
+            if qe < query_len { query_len - qe } else { 0 }
+        };
+
+        // Build core CIGAR (as reported by minimap2) without our added Soft-clips
+        let mut core_ops: Vec<Op> = Vec::new();
         unsafe {
             let p_ref = &*reg.p;
             for i in 0..p_ref.n_cigar {
-                // Access CIGAR array safely using as_ptr() and add()
                 let cigar_ptr = p_ref.cigar.as_ptr().add(i as usize);
                 let cigar_op = *cigar_ptr;
                 let op_len = (cigar_op >> 4) as u32;
                 let op_type = (cigar_op & 0xf) as u8;
-                
-                // Map minimap2 CIGAR operation types to noodles_sam Kind
+
                 let kind = match op_type {
                     0 => Kind::Match,           // M - Match/Mismatch
                     1 => Kind::Insertion,       // I - Insertion
@@ -699,19 +705,35 @@ impl InnerAligner {
                     8 => Kind::SequenceMismatch, // X - Sequence mismatch
                     _ => Kind::Match,           // Default to match for unknown types
                 };
-                
-                ops.push(Op::new(kind, op_len as usize));
+
+                core_ops.push(Op::new(kind, op_len as usize));
             }
         }
-        
-        // Add trailing soft clip to CIGAR operations if needed
-        let aligned_query_end = reg.qe as usize;
-        if aligned_query_end < query_len {
-            let trailing_clip_len = query_len - aligned_query_end;
-            ops.push(Op::new(Kind::SoftClip, trailing_clip_len));
+
+        // Assemble final CIGAR respecting strand:
+        // - Forward strand: [leading S] + core + [trailing S]
+        // - Reverse strand: [trailing S] + core + [leading S]
+        let mut final_ops: Vec<Op> = Vec::new();
+        let is_reverse = reg.rev() != 0;
+        if is_reverse {
+            if trailing_soft_clip_len > 0 {
+                final_ops.push(Op::new(Kind::SoftClip, trailing_soft_clip_len));
+            }
+            final_ops.extend(core_ops.into_iter());
+            if leading_soft_clip_len > 0 {
+                final_ops.push(Op::new(Kind::SoftClip, leading_soft_clip_len));
+            }
+        } else {
+            if leading_soft_clip_len > 0 {
+                final_ops.push(Op::new(Kind::SoftClip, leading_soft_clip_len));
+            }
+            final_ops.extend(core_ops.into_iter());
+            if trailing_soft_clip_len > 0 {
+                final_ops.push(Op::new(Kind::SoftClip, trailing_soft_clip_len));
+            }
         }
 
-        Ok(ops)
+        Ok(final_ops)
     }
     
 }
@@ -834,7 +856,7 @@ mod tests {
                 println!("Number of index parts: {}", aligner.index.parts.len());
 
                 assert!(!aligner.get_header().reference_sequences().is_empty());
-                println!("Reference sequences: {:?}", aligner.get_header().reference_sequences());
+                // println!("Reference sequences: {:?}", aligner.get_header().reference_sequences());
             }
             Err(e) => {
                 println!("Expected failure with fake path: {}", e);
@@ -867,11 +889,11 @@ mod tests {
                 assert!(!header.reference_sequences().is_empty());
                 
                 // Print reference sequence information for debugging
-                for (name, ref_seq) in header.reference_sequences() {
-                    println!("Reference sequence: {} (length: {})", 
-                            String::from_utf8_lossy(name), 
-                            ref_seq.length());
-                }
+                // for (name, ref_seq) in header.reference_sequences() {
+                //     println!("Reference sequence: {} (length: {})", 
+                //             String::from_utf8_lossy(name), 
+                //             ref_seq.length());
+                // }
             }
             Err(e) => {
                 // Expected to fail because the path is fake

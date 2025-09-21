@@ -65,6 +65,14 @@ impl Minimap2Aligner {
         &self.index.header
     }
 
+    pub fn get_index(&self) -> &Minimap2Index {
+        &self.index
+    }
+
+    pub fn get_opts(&self) -> &Minimap2Opts {
+        &self.opts
+    }
+
     /// Align long read assay (single-end)
     /// Main function for aligning a single read
     pub fn align_read(&mut self, fq: &fastq::Record) -> Result<Vec<RecordBuf>> {
@@ -94,7 +102,7 @@ impl Minimap2Aligner {
             let handles: Vec<_> = chunks
                 .into_iter()
                 .map(|chunk| {
-                    let index = self.index.clone();
+                    let index = self.index.clone(); // index has Send trait
                     let opts = self.opts.clone();
                     // Each thread gets its own InnerAligner with independent mm_tbuf_t
                     s.spawn(move || {

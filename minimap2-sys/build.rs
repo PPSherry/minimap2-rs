@@ -38,6 +38,8 @@ fn main() {
         .flag("-O2")
         .flag("-Wc++-compat")
         .define("HAVE_KALLOC", None)
+        .define("cputime", "mm_cputime")
+        .define("realtime", "mm_realtime")
         .warnings(false);
 
     // 5. Add architecture-specific compiler flags and compile SIMD files separately
